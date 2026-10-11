@@ -2160,6 +2160,36 @@
   let pierreFocus = null; // { path, line, side }
   let pierreVisualAnchor = null; // same shape, set by Shift+V
 
+  // Mouse (or pen) state for toggle_viewed / toggle_collapse: whether it is
+  // over the review list, and whether it moved there since the keyboard
+  // focus was last shown (then it, not the focus, picks the file). Moves
+  // synthesized when content scrolls under a still pointer keep the same
+  // position and report no movement, and touch has no hover, so neither
+  // counts.
+  let mouseInList = false;
+  let mouseMovedSinceFocus = false;
+  const reviewList = document.getElementById('filesContainer');
+  let lastPointerPoint = null;
+  reviewList.addEventListener('pointermove', function(e) {
+    if (e.pointerType === 'touch') return;
+    const point = { x: e.clientX, y: e.clientY };
+    const moved = e.movementX || e.movementY ||
+      (lastPointerPoint && (lastPointerPoint.x !== point.x || lastPointerPoint.y !== point.y));
+    lastPointerPoint = point;
+    if (!moved) return;
+    mouseInList = true;
+    mouseMovedSinceFocus = true;
+  });
+  reviewList.addEventListener('pointerleave', function(e) {
+    if (e.pointerType !== 'touch') mouseInList = false;
+  });
+  // Story chapters render outside the review list; there only the pointer
+  // type matters (a tap leaves :hover stuck on the tapped element).
+  let pointerIsMouse = false;
+  ['pointerdown', 'pointermove'].forEach(function(type) {
+    document.addEventListener(type, function(e) { pointerIsMouse = e.pointerType === 'mouse'; }, true);
+  });
+
   // Keyboard rows for a file: diff rows, or the rendered document's blocks
   // when a markdown file is in Document view (same stops as the classic view).
   function pierreNavRows(file) {
@@ -2217,6 +2247,7 @@
   function showPierreFocus() {
     if (!pierreView) return;
     if (!pierreFocus) { pierreView.setSelectedLine(null); return; }
+    mouseMovedSinceFocus = false;
     if (pierreFocus.block !== undefined) {
       const focus = pierreFocus;
       const anchor = pierreVisualAnchor && pierreVisualAnchor.path === focus.path ? pierreVisualAnchor : null;
@@ -2278,7 +2309,16 @@
       });
     }
     if (fileIdx < 0) {
-      enter(order[direction > 0 ? 0 : order.length - 1]);
+      // Focus left in a file that has since collapsed (e.g. marked viewed):
+      // continue from its place in the list instead of the list's ends.
+      const at = pierreFocus ? files.findIndex(function(f) { return f.path === pierreFocus.path; }) : -1;
+      if (at < 0) {
+        enter(order[direction > 0 ? 0 : order.length - 1]);
+        return;
+      }
+      for (let i = at + direction; i >= 0 && i < files.length; i += direction) {
+        if (!files[i].collapsed && !files[i].orphaned) { enter(files[i]); return; }
+      }
       return;
     }
     const file = order[fileIdx];
@@ -3032,6 +3072,19 @@
     return document.getElementById('file-section-' + filePath);
   }
 
+  // Single-file file mode: the header bar names the file, so file headers
+  // (and their Viewed box) are hidden.
+  function isSingleFileMode() {
+    return session.mode !== 'git' && files.length === 1;
+  }
+
+  // Tooltip for a file header control, naming its shortcut when bound.
+  function shortcutTitle(label, id) {
+    const shortcutRegistry = window.crit && window.crit.shortcuts;
+    const keys = shortcutRegistry ? shortcutRegistry.getBinding(id) : '';
+    return keys ? label + ' (' + keys + ')' : label;
+  }
+
   // Fill a file header (name, badge, stats, markdown toggle, change nav,
   // file-comment button, viewed checkbox). Shared by the classic <summary>
   // header and Pierre's custom header slot.
@@ -3050,8 +3103,7 @@
     if (file.status === 'renamed') badgeLabel = 'Renamed';
 
     // In single-file file mode, hide the file header (filename is shown in the header bar)
-    const singleFileMode = session.mode !== 'git' && files.length === 1;
-    if (singleFileMode) header.style.display = 'none';
+    if (isSingleFileMode()) header.style.display = 'none';
 
     const renameHeader = file.status === 'renamed' && file.oldPath
       ? '<span class="rename-paths"><span class="rename-old">' + escapeHtml(file.oldPath) + '</span>' +
@@ -3059,7 +3111,7 @@
       : '<span class="dir">' + escapeHtml(dirPath) + '</span><span class="filename">' + escapeHtml(fileName) + '</span>';
 
     header.innerHTML =
-      '<button type="button" class="file-header-chevron" aria-label="Toggle ' + escapeHtml(file.path) + '"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"/></svg></button>' +
+      '<button type="button" class="file-header-chevron" aria-label="Toggle ' + escapeHtml(file.path) + '" title="' + escapeHtml(shortcutTitle('Collapse or expand', 'toggle_collapse')) + '"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"/></svg></button>' +
       ICON_FILE +
       '<span class="file-header-name">' + renameHeader +
         '<button type="button" class="file-header-copy-path" aria-label="Copy file path">' + ICON_COPY_PATH + '</button>' +
@@ -3194,7 +3246,7 @@
     // Viewed checkbox
     const viewedLabel = document.createElement('label');
     viewedLabel.className = 'file-header-viewed';
-    viewedLabel.title = 'Viewed';
+    viewedLabel.title = shortcutTitle('Viewed', 'toggle_viewed');
     viewedLabel.innerHTML = '<input type="checkbox"' + (file.viewed ? ' checked' : '') + '><span>Viewed</span>';
     viewedLabel.addEventListener('click', function(e) {
       e.stopPropagation(); // Don't toggle the <details>
@@ -8904,6 +8956,40 @@
         document.getElementById('finishBtn').click();
         break;
       }
+      case 'toggle_viewed': case 'toggle_collapse': {
+        // Holding the key would flip the file on every repeat.
+        if (e.repeat) return;
+        const markViewed = shortcutAction === 'toggle_viewed';
+        if (storyActive()) {
+          toggleStoryFile(e, markViewed);
+          break;
+        }
+        if (!pierreView || !pierreViewActive()) return;
+        if (isSingleFileMode()) return;
+        // Whichever pointed at a file last wins: the keyboard focus (while
+        // its file is on screen) or the file under the mouse. The other is
+        // the fallback, e.g. once the mouse has left the list.
+        const keyboardFile = pierreFocus && getFileByPath(pierreFocus.path) &&
+          pierreView.isOnScreen(pierreFocus.path) ? pierreFocus.path : null;
+        const mouseFile = mouseInList ? pierreView.hoveredPath() : null;
+        const filePath = mouseMovedSinceFocus ? (mouseFile || keyboardFile) : (keyboardFile || mouseFile);
+        if (!filePath) return;
+        e.preventDefault();
+        // Collapsing the file would strand a visual range inside it.
+        if (pierreVisualAnchor && pierreVisualAnchor.path === filePath) {
+          pierreVisualAnchor = null;
+          document.body.classList.remove('visual-mode');
+          hidePierreSelection();
+          clearPierreDocVisual();
+        }
+        if (markViewed) {
+          toggleViewed(filePath);
+        } else {
+          const file = getFileByPath(filePath);
+          if (file) pierreView.setCollapsed(file, !file.collapsed);
+        }
+        break;
+      }
       case 'general_comment': {
         e.preventDefault();
         openReviewCommentForm();
@@ -10369,7 +10455,7 @@
       }
       if (file && section.open) {
         e.preventDefault();
-        if (section.getBoundingClientRect().top < 0) section.scrollIntoView({ behavior: 'instant' });
+        revealStorySectionTop(section);
         section.open = false;
         file.collapsed = true;
       }
@@ -10391,7 +10477,7 @@
     const fileName = dirParts.pop();
     const dirPath = dirParts.length > 0 ? dirParts.join('/') + '/' : '';
     header.innerHTML =
-      '<div class="file-header-chevron"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"/></svg></div>' +
+      '<div class="file-header-chevron" title="' + escapeHtml(shortcutTitle('Collapse or expand', 'toggle_collapse')) + '"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"/></svg></div>' +
       ICON_FILE +
       '<span class="file-header-name"><span class="dir">' + escapeHtml(dirPath) + '</span><span class="filename">' + escapeHtml(fileName || filePath) + '</span>' +
         '<button type="button" class="file-header-copy-path" aria-label="Copy file path">' + ICON_COPY_PATH + '</button>' +
@@ -10452,12 +10538,15 @@
 
     const viewedLabel = document.createElement('label');
     viewedLabel.className = 'file-header-viewed';
-    viewedLabel.title = 'Viewed';
+    viewedLabel.title = shortcutTitle('Viewed', 'toggle_viewed');
     viewedLabel.innerHTML = '<input type="checkbox"' + (file && file.viewed ? ' checked' : '') + '><span>Viewed</span>';
     viewedLabel.addEventListener('click', function(e) { e.stopPropagation(); });
     viewedLabel.querySelector('input').addEventListener('change', function () {
       toggleViewed(filePath);
-      if (file && file.viewed && section.open) section.open = false;
+      if (file && file.viewed && section.open) {
+        revealStorySectionTop(section);
+        section.open = false;
+      }
       section.classList.toggle('viewed', !!(file && file.viewed));
       renderStoryRail();
       updateStoryMarkButton(page);
@@ -10804,6 +10893,38 @@
     const pid = storyPageForFile(filePath);
     if (pid && pid !== storyView) { showStory(pid); return true; }
     return false;
+  }
+
+  // A story file group read from its middle (header stuck under the pane's
+  // top edge) is brought back into view before it collapses, so the next
+  // file starts at the top.
+  function revealStorySectionTop(section) {
+    const pane = document.getElementById('storyPane');
+    const top = pane ? pane.getBoundingClientRect().top : 0;
+    if (section.getBoundingClientRect().top < top) section.scrollIntoView({ behavior: 'instant' });
+  }
+
+  // toggle_viewed / toggle_collapse in a story chapter (no line focus
+  // there): the file group under the mouse, else the one taking up most of
+  // the pane. Clicking its Viewed checkbox or header runs the same handlers
+  // as a real click (rail, chapter mark, scroll back to a collapsed header).
+  function toggleStoryFile(e, markViewed) {
+    const pane = document.getElementById('storyPane');
+    if (!pane) return;
+    let group = pointerIsMouse ? pane.querySelector('.crit-story-file-group:hover') : null;
+    if (!group) {
+      const view = pane.getBoundingClientRect();
+      let best = 0;
+      pane.querySelectorAll('.crit-story-file-group').forEach(function(g) {
+        const r = g.getBoundingClientRect();
+        const shown = Math.min(r.bottom, view.bottom) - Math.max(r.top, view.top);
+        if (shown > best) { best = shown; group = g; }
+      });
+    }
+    const target = group && group.querySelector(markViewed ? '.file-header-viewed input' : '.crit-story-file-header');
+    if (!target) return;
+    e.preventDefault();
+    target.click();
   }
 
   function storyActive() { return !!storyState && document.body.classList.contains('crit-story-active'); }
