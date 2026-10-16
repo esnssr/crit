@@ -293,6 +293,23 @@ test.describe('Viewed Shortcut — Git Mode', () => {
     await expect(page.locator('body')).not.toHaveClass(/\bvisual-mode\b/);
   });
 
+  test('a in visual mode keeps the focused line when the file stays open', async ({ page }) => {
+    const [first] = await treePaths(page);
+    await page.keyboard.press('j');
+    await expect(fileItem(page, first).locator('[data-selected-line]').first()).toBeAttached();
+    // Viewed and collapsed, then expanded again: un-viewing it leaves it open.
+    await page.keyboard.press('a');
+    await page.keyboard.press('o');
+    await expectExpanded(page, first);
+    await page.keyboard.press('Shift+V');
+    await expect(page.locator('body')).toHaveClass(/\bvisual-mode\b/);
+
+    await page.keyboard.press('a');
+    await expect(viewedBox(page, first)).not.toBeChecked();
+    await expect(page.locator('body')).not.toHaveClass(/\bvisual-mode\b/);
+    await expect(fileItem(page, first).locator('[data-selected-line]').first()).toBeAttached();
+  });
+
   test('a does nothing without keyboard focus or a hovered file', async ({ page }) => {
     await page.keyboard.press('a');
     await expect(page.locator('#viewedCount')).toContainText('0 /');

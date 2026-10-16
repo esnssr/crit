@@ -2184,10 +2184,11 @@
     if (e.pointerType !== 'touch') mouseInList = false;
   });
   // Story chapters render outside the review list; there only the pointer
-  // type matters (a tap leaves :hover stuck on the tapped element).
-  let pointerIsMouse = false;
+  // type matters (a tap leaves :hover stuck on the tapped element; mouse and
+  // pen hover, as in the review list).
+  let pointerHovers = false;
   ['pointerdown', 'pointermove'].forEach(function(type) {
-    document.addEventListener(type, function(e) { pointerIsMouse = e.pointerType === 'mouse'; }, true);
+    document.addEventListener(type, function(e) { pointerHovers = e.pointerType !== 'touch'; }, true);
   });
 
   // Keyboard rows for a file: diff rows, or the rendered document's blocks
@@ -8976,18 +8977,22 @@
         if (!filePath) return;
         e.preventDefault();
         // Collapsing the file would strand a visual range inside it.
-        if (pierreVisualAnchor && pierreVisualAnchor.path === filePath) {
+        const leftVisual = !!pierreVisualAnchor && pierreVisualAnchor.path === filePath;
+        if (leftVisual) {
           pierreVisualAnchor = null;
           document.body.classList.remove('visual-mode');
           hidePierreSelection();
           clearPierreDocVisual();
         }
+        const file = getFileByPath(filePath);
         if (markViewed) {
           toggleViewed(filePath);
-        } else {
-          const file = getFileByPath(filePath);
-          if (file) pierreView.setCollapsed(file, !file.collapsed);
+        } else if (file) {
+          pierreView.setCollapsed(file, !file.collapsed);
         }
+        // The file stayed open (un-viewed, or expanded): keep the focused
+        // line highlighted, as Esc does when it leaves visual mode.
+        if (leftVisual && file && !file.collapsed) showPierreFocus();
         break;
       }
       case 'general_comment': {
@@ -10911,7 +10916,7 @@
   function toggleStoryFile(e, markViewed) {
     const pane = document.getElementById('storyPane');
     if (!pane) return;
-    let group = pointerIsMouse ? pane.querySelector('.crit-story-file-group:hover') : null;
+    let group = pointerHovers ? pane.querySelector('.crit-story-file-group:hover') : null;
     if (!group) {
       const view = pane.getBoundingClientRect();
       let best = 0;
